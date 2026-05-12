@@ -268,8 +268,52 @@
                 <div class="detail-status">
                   <span class="http-badge">HTTP 200 OK</span>
                   <span class="tag tag--ok">資源存在</span>
+                  <button class="btn btn--ghost btn--inline" @click="startEditPatient">✏️ 編輯</button>
                 </div>
-                <table class="detail-table">
+
+                <!-- 編輯模式 -->
+                <div v-if="editPat.editing" class="edit-form">
+                  <div class="form-row">
+                    <div class="field">
+                      <label>姓 <span class="req">*</span></label>
+                      <input v-model="editPat.form.familyName" />
+                    </div>
+                    <div class="field">
+                      <label>名 <span class="req">*</span></label>
+                      <input v-model="editPat.form.givenName" />
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label>身分證字號</label>
+                    <input v-model="editPat.form.identifier" />
+                  </div>
+                  <div class="form-row">
+                    <div class="field">
+                      <label>性別</label>
+                      <select v-model="editPat.form.gender">
+                        <option value="male">男</option>
+                        <option value="female">女</option>
+                        <option value="other">其他</option>
+                        <option value="unknown">未知</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>出生日期</label>
+                      <input type="date" v-model="editPat.form.birthDate" />
+                    </div>
+                  </div>
+                  <div class="edit-actions">
+                    <button class="btn btn--primary" @click="updatePatient"
+                      :disabled="editPat.loading">
+                      <span v-if="editPat.loading" class="loading-dot">更新中</span>
+                      <span v-else>💾 PUT 更新</span>
+                    </button>
+                    <button class="btn btn--ghost" @click="editPat.editing = false">取消</button>
+                  </div>
+                  <div v-if="editPat.error" class="result result--err">❌ {{ editPat.error }}</div>
+                </div>
+
+                <table v-else class="detail-table">
                   <tbody>
                     <tr>
                       <th>Resource ID</th>
@@ -316,6 +360,151 @@
             <div v-if="qPat.error" class="result result--err">❌ {{ qPat.error }}</div>
           </div>
         </div>
+
+        <!-- ── identifier 搜尋 ── -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <h3>Identifier 搜尋</h3>
+              <small>健保代碼 / 身分證字號</small>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label>搜尋目標</label>
+              <select v-model="qIdent.target">
+                <option value="Organization">Organization（用健保代碼）</option>
+                <option value="Patient">Patient（用身分證字號）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Identifier 值</label>
+              <div class="input-group">
+                <input v-model="qIdent.value"
+                  :placeholder="qIdent.target === 'Organization' ? '1145060001' : 'U123456789'"
+                  @keyup.enter="searchByIdentifier" />
+                <button class="btn btn--secondary" @click="searchByIdentifier"
+                  :disabled="!qIdent.value.trim() || qIdent.loading">
+                  {{ qIdent.loading ? '搜尋中...' : '搜尋' }}
+                </button>
+              </div>
+            </div>
+            <transition name="fade">
+              <div v-if="qIdent.result">
+                <p class="query-summary">
+                  共找到 <strong>{{ qIdent.result.total ?? 0 }}</strong> 筆 {{ qIdent.target }}
+                </p>
+                <div v-if="qIdent.result.entry?.length" class="patient-list">
+                  <div v-for="e in qIdent.result.entry" :key="e.resource.id" class="patient-row"
+                    @click="openIdentResult(e.resource)">
+                    <div class="pr-id">{{ e.resource.id }}</div>
+                    <div class="pr-name">
+                      <template v-if="e.resource.resourceType === 'Patient'">
+                        {{ e.resource.name?.[0]?.family }}{{ e.resource.name?.[0]?.given?.join('') }}
+                      </template>
+                      <template v-else>{{ e.resource.name }}</template>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="no-data">查無資料</p>
+              </div>
+            </transition>
+            <div v-if="qIdent.error" class="result result--err">❌ {{ qIdent.error }}</div>
+          </div>
+        </div>
+
+        <!-- ── Chaining 連鎖查詢 ── -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <h3>Chaining 連鎖查詢</h3>
+              <small>用機構名稱找病患</small>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="ref-badge">
+              🔗 <code>Patient?organization.name={名稱}</code>
+            </div>
+            <div class="field">
+              <label>Organization 名稱</label>
+              <div class="input-group">
+                <input v-model="qChain.orgName" placeholder="花蓮好健康醫院"
+                  @keyup.enter="searchByChaining" />
+                <button class="btn btn--secondary" @click="searchByChaining"
+                  :disabled="!qChain.orgName.trim() || qChain.loading">
+                  {{ qChain.loading ? '查詢中...' : '查詢' }}
+                </button>
+              </div>
+            </div>
+            <transition name="fade">
+              <div v-if="qChain.result">
+                <p class="query-summary">
+                  共找到 <strong>{{ qChain.result.total ?? 0 }}</strong> 位病患
+                </p>
+                <div v-if="qChain.result.entry?.length" class="patient-list">
+                  <div v-for="e in qChain.result.entry" :key="e.resource.id"
+                    class="patient-row" @click="openPatient(e.resource.id)">
+                    <div class="pr-id">{{ e.resource.id }}</div>
+                    <div class="pr-name">
+                      {{ e.resource.name?.[0]?.family }}{{ e.resource.name?.[0]?.given?.join('') }}
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="no-data">無符合資料</p>
+              </div>
+            </transition>
+            <div v-if="qChain.error" class="result result--err">❌ {{ qChain.error }}</div>
+          </div>
+        </div>
+
+        <!-- ── $validate 驗證 ── -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <h3>$validate 驗證</h3>
+              <small>檢查資源是否符合 FHIR 規範</small>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="field">
+                <label>資源類型</label>
+                <select v-model="qVal.resourceType">
+                  <option value="Organization">Organization</option>
+                  <option value="Location">Location</option>
+                  <option value="Patient">Patient</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Resource ID</label>
+                <input v-model="qVal.id" placeholder="輸入 ID" />
+              </div>
+            </div>
+            <button class="btn btn--primary" @click="validateResource"
+              :disabled="!qVal.id.trim() || qVal.loading">
+              <span v-if="qVal.loading" class="loading-dot">驗證中</span>
+              <span v-else>🔍 $validate</span>
+            </button>
+            <transition name="fade">
+              <div v-if="qVal.outcome">
+                <div v-if="qVal.errorCount === 0" class="result result--ok">
+                  ✅ 驗證通過 — 無 Error / Fatal issue
+                  <span v-if="qVal.warnCount" class="tag tag--warn" style="margin-left:8px">
+                    {{ qVal.warnCount }} 個 warning
+                  </span>
+                </div>
+                <div v-else class="result result--err">
+                  ❌ 驗證失敗 — {{ qVal.errorCount }} 個 error
+                </div>
+                <details class="json-viewer">
+                  <summary>OperationOutcome ({{ qVal.outcome.issue?.length || 0 }} issue)</summary>
+                  <pre>{{ JSON.stringify(qVal.outcome, null, 2) }}</pre>
+                </details>
+              </div>
+            </transition>
+            <div v-if="qVal.error" class="result result--err">❌ {{ qVal.error }}</div>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -352,6 +541,20 @@ const pat = reactive({
 // ── 查詢資源狀態 ──────────────────────────────────────────────
 const qOrg = reactive({ inputId: '', result: null, error: null, loading: false })
 const qPat = reactive({ inputId: '', result: null, error: null, loading: false })
+
+// identifier 搜尋 / chaining / validate / 編輯
+const qIdent = reactive({ target: 'Organization', value: '', result: null, error: null, loading: false })
+const qChain = reactive({ orgName: '', result: null, error: null, loading: false })
+const qVal = reactive({
+  resourceType: 'Patient', id: '',
+  outcome: null, errorCount: 0, warnCount: 0,
+  error: null, loading: false,
+})
+const editPat = reactive({
+  editing: false,
+  form: { familyName: '', givenName: '', identifier: '', gender: 'male', birthDate: '' },
+  error: null, loading: false,
+})
 
 // ── Toast 通知 ────────────────────────────────────────────────
 const toast = reactive({ show: false, msg: '' })
@@ -457,6 +660,111 @@ async function queryByPatId() {
 function openPatient(id) {
   qPat.inputId = id
   queryByPatId()
+}
+
+// ── identifier 搜尋 ───────────────────────────────────────────
+async function searchByIdentifier() {
+  if (!qIdent.value.trim()) return
+  qIdent.loading = true
+  qIdent.result = null
+  qIdent.error = null
+  try {
+    const { data } = await axios.get(`${API}/search/${qIdent.target}`, {
+      params: { identifier: qIdent.value.trim() },
+    })
+    qIdent.result = data
+  } catch (e) {
+    qIdent.error = e.response?.data?.error ?? e.message
+  } finally {
+    qIdent.loading = false
+  }
+}
+
+function openIdentResult(resource) {
+  if (resource.resourceType === 'Patient') {
+    openPatient(resource.id)
+  } else if (resource.resourceType === 'Organization') {
+    qOrg.inputId = resource.id
+    queryByOrg()
+  }
+}
+
+// ── Chaining 連鎖查詢 ─────────────────────────────────────────
+async function searchByChaining() {
+  if (!qChain.orgName.trim()) return
+  qChain.loading = true
+  qChain.result = null
+  qChain.error = null
+  try {
+    const { data } = await axios.get(`${API}/search/Patient`, {
+      params: { 'organization.name': qChain.orgName.trim() },
+    })
+    qChain.result = data
+  } catch (e) {
+    qChain.error = e.response?.data?.error ?? e.message
+  } finally {
+    qChain.loading = false
+  }
+}
+
+// ── $validate ────────────────────────────────────────────────
+async function validateResource() {
+  if (!qVal.id.trim()) return
+  qVal.loading = true
+  qVal.outcome = null
+  qVal.error = null
+  try {
+    const { data } = await axios.post(
+      `${API}/validate/${qVal.resourceType}/${qVal.id.trim()}`
+    )
+    qVal.outcome = data.outcome
+    const issues = data.outcome?.issue ?? []
+    qVal.errorCount = issues.filter(i => i.severity === 'error' || i.severity === 'fatal').length
+    qVal.warnCount = issues.filter(i => i.severity === 'warning').length
+    showToast(qVal.errorCount === 0 ? '✅ 驗證通過' : `❌ ${qVal.errorCount} 個 error`)
+  } catch (e) {
+    qVal.error = e.response?.data?.error ?? e.message
+  } finally {
+    qVal.loading = false
+  }
+}
+
+// ── PUT 編輯病患 ──────────────────────────────────────────────
+function startEditPatient() {
+  if (!qPat.result) return
+  const r = qPat.result
+  editPat.form.familyName = r.name?.[0]?.family ?? ''
+  editPat.form.givenName = r.name?.[0]?.given?.[0] ?? ''
+  editPat.form.identifier = r.identifier?.[0]?.value ?? ''
+  editPat.form.gender = r.gender ?? 'unknown'
+  editPat.form.birthDate = r.birthDate ?? ''
+  editPat.error = null
+  editPat.editing = true
+}
+
+async function updatePatient() {
+  if (!qPat.result) return
+  const orgRef = qPat.result.managingOrganization?.reference ?? ''
+  const orgId = orgRef.split('/').pop()
+  if (!orgId) {
+    editPat.error = '此病患沒有 managingOrganization，無法更新'
+    return
+  }
+  editPat.loading = true
+  editPat.error = null
+  try {
+    const { data } = await axios.put(`${API}/patient/${qPat.result.id}`, {
+      ...editPat.form,
+      orgId,
+    })
+    qPat.result = data.resource
+    editPat.editing = false
+    showToast(`✅ Patient 已更新（HTTP ${data.httpStatus}）`)
+  } catch (e) {
+    editPat.error = e.response?.data?.error ?? e.message
+  } finally {
+    editPat.loading = false
+  }
 }
 
 // ── 重置全部 ──────────────────────────────────────────────────
@@ -684,6 +992,26 @@ input:disabled, select:disabled {
   width: 100%;
   text-align: center;
 }
+
+.btn--inline {
+  padding: 4px 12px;
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.edit-form {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.edit-actions .btn--primary { flex: 1; margin-top: 0; }
 
 /* ── Ref Badge (Resource Link) ── */
 .ref-badge {

@@ -150,6 +150,84 @@ app.get('/api/patient/:id', async (req, res) => {
   }
 });
 
+// ─── GET 通用搜尋（支援 identifier、name、organization、organization.name 等）──
+app.get('/api/search/:resourceType', async (req, res) => {
+  const { resourceType } = req.params;
+  try {
+    const resp = await axios.get(`${FHIR_BASE}/${resourceType}`, {
+      params: req.query,
+      headers: FHIR_HEADERS,
+    });
+    res.json(resp.data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({
+      error: err.response?.data?.issue?.[0]?.diagnostics || err.message,
+    });
+  }
+});
+
+// ─── POST $validate ───────────────────────────────────────────
+// 先 GET 現存資源，再 POST 至 {ResourceType}/$validate 端點
+app.post('/api/validate/:resourceType/:id', async (req, res) => {
+  const { resourceType, id } = req.params;
+  try {
+    const getResp = await axios.get(`${FHIR_BASE}/${resourceType}/${id}`, {
+      headers: FHIR_HEADERS,
+    });
+    const valResp = await axios.post(
+      `${FHIR_BASE}/${resourceType}/$validate`,
+      getResp.data,
+      { headers: FHIR_HEADERS }
+    );
+    res.json({ httpStatus: valResp.status, outcome: valResp.data });
+  } catch (err) {
+    // $validate 失敗時回傳的 OperationOutcome 也視為合法回應
+    if (err.response?.data?.resourceType === 'OperationOutcome') {
+      return res.json({ httpStatus: err.response.status, outcome: err.response.data });
+    }
+    res.status(err.response?.status || 500).json({
+      error: err.response?.data?.issue?.[0]?.diagnostics || err.message,
+    });
+  }
+});
+
+// ─── PUT Update Patient ───────────────────────────────────────
+app.put('/api/patient/:id', async (req, res) => {
+  const { id } = req.params;
+  const { familyName, givenName, identifier, gender, birthDate, orgId, active } = req.body;
+  if (!familyName || !givenName || !orgId) {
+    return res.status(400).json({ error: '姓名與 Organization ID 為必填' });
+  }
+
+  const payload = {
+    resourceType: 'Patient',
+    id,
+    active: active !== undefined ? active : true,
+    name: [{ use: 'official', family: familyName, given: [givenName] }],
+    gender: gender || 'unknown',
+    managingOrganization: { reference: `Organization/${orgId}` },
+    ...(identifier && {
+      identifier: [{
+        system: 'http://www.moi.gov.tw',
+        value: identifier,
+      }],
+    }),
+    ...(birthDate && { birthDate }),
+  };
+
+  try {
+    const resp = await axios.put(`${FHIR_BASE}/Patient/${id}`, payload, {
+      headers: FHIR_HEADERS,
+    });
+    res.json({ id: extractId(resp) || id, httpStatus: resp.status, resource: resp.data });
+  } catch (err) {
+    res.status(err.response?.status || 500).json({
+      error: err.response?.data?.issue?.[0]?.diagnostics || err.message,
+      httpStatus: err.response?.status,
+    });
+  }
+});
+
 // ─── DELETE resource ──────────────────────────────────────────
 app.delete('/api/:resourceType/:id', async (req, res) => {
   const { resourceType, id } = req.params;
